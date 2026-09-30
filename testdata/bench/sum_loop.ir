@@ -1,0 +1,29 @@
+// sum_loop: arithmetic reduction in a loop with a callee.
+// Computes double(sum(0..n)) and stores n into memory[0].
+func double(v0):
+  entry:
+    v1 = 2
+    v2 = mul v0, v1
+    ret v2
+
+func main(v0):
+  entry:
+    v1 = 0
+    v8 = 1
+    store v0, [v1]
+    jmp loop
+  loop:
+    v2 = 0
+    v3 = cmplt v2, v0
+    br v3, body, done
+  body:
+    v4 = add v1, v0
+    v5 = 1
+    v6 = sub v0, v5
+    v1 = v4
+    v0 = v6
+    jmp loop
+  done:
+    v7 = double(v1)
+    store v7, [v8]
+    ret v7

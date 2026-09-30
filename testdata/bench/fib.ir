@@ -1,0 +1,23 @@
+// fib: recursive Fibonacci using the fixed calling convention.
+// fib(n) = n for n < 2 else fib(n-1) + fib(n-2).
+func fib(v0):
+  entry:
+    v1 = 2
+    v2 = cmplt v0, v1
+    br v2, base, rec
+  base:
+    ret v0
+  rec:
+    v3 = 1
+    v4 = sub v0, v3
+    v5 = fib(v4)
+    v6 = 2
+    v7 = sub v0, v6
+    v8 = fib(v7)
+    v9 = add v5, v8
+    ret v9
+
+func main(v0):
+  entry:
+    v1 = fib(v0)
+    ret v1
