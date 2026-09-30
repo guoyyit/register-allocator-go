@@ -1,0 +1,32 @@
+; Values that must survive across fixed-ABI calls; arguments and results are
+; passed in r0.. and the callee clobbers every physical register.
+func dbl
+param %1
+entry:
+	%2 = add %1, %1
+	ret %2
+
+func add4
+param %1
+param %2
+param %3
+param %4
+entry:
+	%5 = add %1, %2
+	%6 = add %3, %4
+	%7 = add %5, %6
+	ret %7
+
+func main
+entry:
+	%10 = const 1
+	%11 = const 2
+	%12 = const 3
+	%13 = const 4
+	%14 = call dbl(%10)
+	%15 = add %11, %14
+	%16 = call add4(%12, %13, %14, %15)
+	store 0, %16
+	%17 = call dbl(%11)
+	%18 = add %16, %17
+	ret %18

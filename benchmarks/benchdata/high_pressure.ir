@@ -1,0 +1,27 @@
+; Sustained register pressure: many simultaneously live values feeding a
+; reduction chain. With 4 physical registers the allocator must spill, but
+; a furthest-next-use policy keeps the spill count bounded.
+func main
+entry:
+	%1 = const 3
+	%2 = const 5
+	%3 = const 7
+	%4 = const 11
+	%5 = const 13
+	%6 = const 17
+	%7 = const 19
+	%8 = const 23
+	%9 = add %1, %2
+	%10 = add %3, %4
+	%11 = add %5, %6
+	%12 = add %7, %8
+	%13 = mul %9, %10
+	%14 = mul %11, %12
+	%15 = add %13, %14
+	%16 = add %15, %1
+	%17 = add %16, %2
+	%18 = add %17, %3
+	%19 = add %18, %4
+	%20 = add %19, %5
+	store 0, %20
+	ret %20
