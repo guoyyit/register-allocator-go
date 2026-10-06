@@ -106,8 +106,19 @@ input).
    whose slot copy is stale is emitted as a `spill` first.
 5. **Control-flow and call boundaries.** Before every terminator and every
    call, every live register-resident value with a stale slot is written to
-   its home slot; successor blocks therefore find live values in slots.
-6. **Two-address operations.** Binary operations need two distinct source
+   its home slot; successor blocks therefore find live values in slots. This
+   includes the value of a branch condition: when it stays live into a
+   successor block it is flushed to its slot before the `br`, so the
+   successor can never reload a stale copy while the branch itself still
+   tests the (correct) register.
+6. **Entry-block back-edges.** If some terminator jumps back to the entry
+   block, re-executing the parameter-homing prologue would clobber the
+   parameters' home slots with whatever the ABI registers hold at the jump.
+   For such functions the homing runs exactly once per call in a synthetic
+   `.prologue` block that falls through to the real entry block via a `jmp`.
+   Functions without entry back-edges are unaffected and keep their previous
+   output shape.
+7. **Two-address operations.** Binary operations need two distinct source
    registers and a destination. With `k >= 3` the sources are materialized in
    `r0/r1` and the result in another register; with `k == 2` the sources are
    routed through their slots into `r0/r1` and the result is produced in `r0`,
@@ -122,12 +133,28 @@ overwritten without first being stored when it is still needed.
 For every benchmark and several hand-written programs, tests execute the
 input both with the direct IR interpreter and with the generated target code
 across multiple register counts (`k = 2, 3, 4, 8, ...`) and require identical
-return values **and** memory contents. Coverage includes:
+return values **and** memory contents. Programs store values that are still
+live at their exit points into memory before returning, so the full-memory
+comparison also covers exit-live values. Coverage includes:
 
 - loops and reducible control flow;
 - recursive calls and cross-call-live values;
 - calls that occupy every physical register with arguments;
-- extreme register pressure (200 live values with 2–4 registers).
+- extreme register pressure (200 live values with 2–4 registers);
+- branch forms (`internal/codegen/branch_test.go`): a branch condition that
+  stays live into one or both successor blocks, branch-dense chains, nested
+  branches, values merged from multiple predecessors that become branch
+  conditions, loop conditions read in the body and after the exit, and
+  back-edges to the entry block — each exercised over every reachable path
+  (via several argument sets) at several register counts;
+- a deterministic randomized probe
+  (`internal/codegen/branch_fuzz_test.go`) that generates branch-heavy
+  programs with fixed seeds and requires interpreter/target equivalence for
+  every generated program; a failure reproduces exactly from its seed.
+
+The required invariant is: for every legal input program and every physical
+register count `k >= 2`, the target machine's final state (return value and
+full memory) equals the IR interpreter's, on every reachable path.
 
 ## Spill budgets
 
@@ -137,6 +164,18 @@ reload counts for each benchmark at several values of `k` (see the `budgets`
 table in `internal/bench/bench_test.go`). A change that increases stack
 traffic beyond the ceiling fails the tests, guarding against allocation
 quality regressions. The current allocator comfortably fits the ceilings.
+
+`branchy.ir` is the branch-form regression benchmark: its condition values
+stay live into successor blocks, so its budget also guards the edge-flush
+correctness fix from degenerating (a missing flush is a wrong-code bug the
+equivalence tests catch; a reappearing *excess* of spills is caught here).
+
+Maintaining the ceilings: when the allocator changes, regenerate the observed
+counts with `go test ./internal/bench -run TestSpillBudgets -v`, then either
+tighten the code until the old ceilings hold again, or raise a ceiling only
+after consciously accepting the extra stack traffic. New benchmarks must be
+added to both the `budgets` table (with ceilings close to the observed
+counts) and the `entryArgs` map so equivalence is checked too.
 
 ## Determinism
 

@@ -1,0 +1,35 @@
+// branchy: nested branches whose condition values stay live in successor
+// blocks. The outer loop condition is read in the body and again after the
+// loop exit; the inner condition is reused inside its own then-arm.
+// Exercises edge flushes on every reachable path under register pressure.
+func main(v0):
+  entry:
+    v1 = 0
+    v2 = 0
+    v3 = 6
+    jmp head
+  head:
+    v4 = cmplt v2, v3
+    br v4, body, done
+  body:
+    v5 = add v2, v0
+    v6 = cmplt v0, v5
+    br v6, addcond, addplain
+  addcond:
+    v7 = add v1, v6
+    v8 = add v7, v4
+    v1 = v8
+    jmp next
+  addplain:
+    v9 = add v1, v2
+    v1 = v9
+    jmp next
+  next:
+    v10 = 1
+    v2 = add v2, v10
+    jmp head
+  done:
+    v11 = add v4, v1
+    v12 = 0
+    store v11, [v12]
+    ret v11

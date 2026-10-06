@@ -40,6 +40,9 @@ var budgets = []budget{
 	{"cross_call.ir", 2, 40, 40},
 	{"cross_call.ir", 4, 40, 40},
 	{"cross_call.ir", 8, 40, 40},
+	{"branchy.ir", 2, 20, 24},
+	{"branchy.ir", 4, 20, 24},
+	{"branchy.ir", 8, 20, 24},
 }
 
 func loadProg(t *testing.T, name string) *ir.Program {
@@ -81,6 +84,7 @@ var entryArgs = map[string][]int64{
 	"fib.ir":           {12},
 	"high_pressure.ir": {},
 	"cross_call.ir":    {3},
+	"branchy.ir":       {2},
 }
 
 // TestEquivalence runs every benchmark both on the IR interpreter and on the
