@@ -1,0 +1,51 @@
+# Branch-dense benchmark: nested conditional control flow where branch
+# condition values stay live into successor blocks, combined with a loop,
+# a call per iteration and bounded memory traffic.
+
+func classify(v0):
+  entry:
+    v1 = 0
+    v2 = cmplt v0, v1
+    br v2, neg, nonneg
+  neg:
+    v3 = sub v1, v0
+    v9 = add v3, v2
+    ret v9
+  nonneg:
+    v4 = 10
+    v5 = cmplt v0, v4
+    br v5, small, big
+  small:
+    v6 = mul v0, v0
+    v10 = add v6, v5
+    ret v10
+  big:
+    v7 = div v0, v4
+    v11 = sub v7, v5
+    ret v11
+
+func main(v0):
+  entry:
+    v1 = 0
+    v2 = 0
+    v8 = 0
+    v10 = 8
+    jmp head
+  head:
+    v3 = cmplt v2, v0
+    br v3, body, done
+  body:
+    v4 = classify(v2)
+    v5 = add v1, v4
+    v6 = 1
+    v7 = add v2, v6
+    v9 = mod v2, v10
+    store v4, [v9]
+    v1 = v5
+    v2 = v7
+    jmp head
+  done:
+    v11 = [v8]
+    v12 = add v1, v3
+    v13 = add v12, v11
+    ret v13

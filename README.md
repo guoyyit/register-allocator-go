@@ -106,8 +106,17 @@ input).
    whose slot copy is stale is emitted as a `spill` first.
 5. **Control-flow and call boundaries.** Before every terminator and every
    call, every live register-resident value with a stale slot is written to
-   its home slot; successor blocks therefore find live values in slots.
-6. **Two-address operations.** Binary operations need two distinct source
+   its home slot; successor blocks therefore find live values in slots. The
+   condition value of a conditional branch is no exception: when it stays
+   live into a successor block its home slot must be current before the
+   `br` executes, otherwise the successor would reload a stale value.
+6. **Prologue block.** Functions with parameters start with a synthetic
+   prologue block that homes the ABI argument registers into the parameter
+   slots and then jumps to the IR entry block. The homing therefore runs
+   exactly once per call: the IR entry block may itself be the target of a
+   back-edge, and re-executing the spills there would clobber the parameter
+   slots with whatever the argument registers happen to hold at jump time.
+7. **Two-address operations.** Binary operations need two distinct source
    registers and a destination. With `k >= 3` the sources are materialized in
    `r0/r1` and the result in another register; with `k == 2` the sources are
    routed through their slots into `r0/r1` and the result is produced in `r0`,
@@ -121,13 +130,34 @@ overwritten without first being stored when it is still needed.
 
 For every benchmark and several hand-written programs, tests execute the
 input both with the direct IR interpreter and with the generated target code
-across multiple register counts (`k = 2, 3, 4, 8, ...`) and require identical
-return values **and** memory contents. Coverage includes:
+across multiple register counts (`k = 2, 3, 4, 8, ...`) and multiple argument
+sets, and require identical final states: the return value, the **full**
+memory image, and the values still live at the program exit. Exit-live values
+are made observable by a test harness
+(`instrumentExitLive` in `internal/codegen/branch_test.go`) that rewrites the
+entry function to dump every definitely-defined virtual register to a
+dedicated memory region just before each exit `ret`; the full-memory
+comparison then covers them. Any divergence between the target machine and
+the interpreter — a changed branch decision, an overwritten value, or a
+successor block reading stale slot contents — shows up as a mismatch.
 
-- loops and reducible control flow;
+Coverage includes:
+
+- loops and reducible control flow, including back-edges to the function
+  entry block;
+- conditional branches whose condition value is read again in successor
+  blocks, in nested branches, branch chains, multi-predecessor joins and
+  loop headers, also under extreme register pressure and across calls;
 - recursive calls and cross-call-live values;
 - calls that occupy every physical register with arguments;
-- extreme register pressure (200 live values with 2–4 registers).
+- extreme register pressure (200 live values with 2–4 registers);
+- deterministic pseudo-random branchy programs (seeded, therefore exactly
+  reproducible) checked on every reachable path
+  (`TestRandomizedBranchEquivalence`).
+
+The branch-shape regressions live in `internal/codegen/branch_test.go` and
+`internal/codegen/differential_test.go`; each of them fails on the historical
+allocator that skipped flushing the branch condition at control-flow edges.
 
 ## Spill budgets
 
@@ -137,6 +167,14 @@ reload counts for each benchmark at several values of `k` (see the `budgets`
 table in `internal/bench/bench_test.go`). A change that increases stack
 traffic beyond the ceiling fails the tests, guarding against allocation
 quality regressions. The current allocator comfortably fits the ceilings.
+
+The suite includes `branch_maze.ir`, a branch-dense benchmark whose condition
+values stay live into successor blocks; its ceilings (spills ≤ 30, reloads ≤
+40 at `k = 2, 4, 8`) were set by measuring the fixed allocator and adding a
+small headroom. To raise a ceiling deliberately, measure with a temporary
+test that logs `res.Stats` for the benchmark, then update the `budgets`
+table with the observed numbers plus headroom and say why in the commit
+message.
 
 ## Determinism
 

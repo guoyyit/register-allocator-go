@@ -113,9 +113,23 @@ func (cg *generator) genFunc(f *ir.Func, as *alloc.Assignment) (*target.Func, er
 	cg.newFunc(f, as)
 	tf := &target.Func{Name: f.Name, Params: len(f.Params)}
 
+	if len(f.Params) > 0 {
+		// Home the ABI argument registers in a dedicated prologue block so
+		// the homing runs exactly once per call. The IR entry block may
+		// itself be the target of a back-edge; emitting the spills there
+		// would re-execute them on every iteration and clobber the
+		// parameter slots with whatever the argument registers happen to
+		// hold at jump time.
+		pb := &target.Block{Name: cg.prologueName(f)}
+		cg.genPrologue(f)
+		pb.Inst = append(pb.Inst, cg.out...)
+		cg.out = nil
+		tf.Blocks = append(tf.Blocks, pb)
+	}
+
 	for bi, b := range f.Blocks {
 		tb := &target.Block{Name: b.Name}
-		cg.beginBlock(bi == 0)
+		cg.beginBlock()
 		for ii, ins := range b.Inst {
 			if err := cg.genInst(bi, ii, ins); err != nil {
 				return nil, err
@@ -128,28 +142,50 @@ func (cg *generator) genFunc(f *ir.Func, as *alloc.Assignment) (*target.Func, er
 	return tf, nil
 }
 
-// beginBlock resets the block-scoped register cache. On function entry the
-// ABI parameter registers are homed into each parameter's fixed slot.
-func (cg *generator) beginBlock(isEntry bool) {
+// prologueName returns a block name for the prologue that cannot collide with
+// any user-written block name in f.
+func (cg *generator) prologueName(f *ir.Func) string {
+	name := ".prologue"
+	for {
+		if _, ok := f.BlockIndex(name); !ok {
+			return name
+		}
+		name = "_" + name
+	}
+}
+
+// genPrologue emits the function prologue: every ABI argument register is
+// homed into its parameter's fixed slot, then control enters the IR entry
+// block through an explicit jump.
+func (cg *generator) genPrologue(f *ir.Func) {
+	cg.resetCache()
+	for i, pr := range f.Params {
+		v := int(pr)
+		s := cg.homeSlot(v)
+		cg.emit(target.Instruction{Op: target.OpSpill, Rs1: target.Reg(i), Slot: s})
+	}
+	cg.emit(target.Instruction{Op: target.OpJmp, Label: f.Blocks[0].Name})
+}
+
+// resetCache drops every register binding and marks all slot copies stale.
+func (cg *generator) resetCache() {
 	for v := range cg.cachedReg {
 		cg.cachedReg[v] = -1
 	}
 	for v := range cg.slotFresh {
 		cg.slotFresh[v] = false
 	}
-	if !isEntry {
-		for v, s := range cg.home {
-			if s >= 0 {
-				cg.slotFresh[v] = true
-			}
+}
+
+// beginBlock resets the block-scoped register cache. Values live across a
+// block boundary are carried in their home slots (every terminator flushes
+// them), so each homed slot starts the block current.
+func (cg *generator) beginBlock() {
+	cg.resetCache()
+	for v, s := range cg.home {
+		if s >= 0 {
+			cg.slotFresh[v] = true
 		}
-		return
-	}
-	for i, pr := range cg.f.Params {
-		v := int(pr)
-		s := cg.homeSlot(v)
-		cg.emit(target.Instruction{Op: target.OpSpill, Rs1: target.Reg(i), Slot: s})
-		cg.slotFresh[v] = true
 	}
 }
 
@@ -227,8 +263,15 @@ func (cg *generator) nextUse(bi, ii, v int) int {
 // load places vreg v in a register outside reserved, reusing a cached copy
 // when possible and otherwise reloading from its home slot.
 func (cg *generator) load(bi, ii, v int, reserved map[int]bool) target.Reg {
-	if r := cg.cachedReg[v]; r >= 0 && !reserved[r] {
-		return target.Reg(r)
+	if r := cg.cachedReg[v]; r >= 0 {
+		if !reserved[r] {
+			return target.Reg(r)
+		}
+		// The cached register is reserved for another operand of the same
+		// instruction, so v must be re-materialized elsewhere. Make its slot
+		// copy current first: reloading a stale slot would resurrect an old
+		// value and orphan the live one.
+		cg.syncSlot(v, r)
 	}
 	r := cg.evict(bi, ii, reserved)
 	cg.emit(target.Instruction{Op: target.OpReload, Rd: target.Reg(r), Slot: cg.homeSlot(v)})
@@ -260,10 +303,13 @@ func (cg *generator) define(bi, ii, v, r int) {
 }
 
 // flushAtEdge writes cached live values with stale slot copies to their slots.
-func (cg *generator) flushAtEdge(bi, ii int, keep *int) {
+// Every value live after the terminator must be slot-current before the edge:
+// successor blocks find live values in their home slots, so skipping any of
+// them (including a branch condition) would let successors reload stale data.
+func (cg *generator) flushAtEdge(bi, ii int) {
 	for r := 0; r < cg.k; r++ {
 		v := cg.regToVReg(r)
-		if v < 0 || (keep != nil && *keep == v) {
+		if v < 0 {
 			continue
 		}
 		if cg.liveAfter(bi, ii, v) && !cg.slotFresh[v] {
@@ -421,12 +467,15 @@ func (cg *generator) genInst(bi, ii int, ins *ir.Inst) error {
 		cg.emit(target.Instruction{Op: target.OpRet})
 
 	case ir.OpJmp:
-		cg.flushAtEdge(bi, ii, nil)
+		cg.flushAtEdge(bi, ii)
 		cg.emit(target.Instruction{Op: target.OpJmp, Label: ins.Label})
 
 	case ir.OpBr:
+		// The condition value may stay live into a successor block, so it
+		// must be flushed like every other live-out value before the edge;
+		// only then is it materialized in a register for the branch itself.
 		cv := int(ins.Src1)
-		cg.flushAtEdge(bi, ii, &cv)
+		cg.flushAtEdge(bi, ii)
 		rc := cg.load(bi, ii, cv, nil)
 		cg.emit(target.Instruction{Op: target.OpBr, Rs1: rc, Label: ins.Label, Next: ins.Next})
 
